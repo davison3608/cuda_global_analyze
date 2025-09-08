@@ -25,7 +25,6 @@ __device__ Complex complex_sub(Complex a, Complex b) {
     res.imag=a.imag - b.imag;
     return res;
 }
-
 //! 一维线程块 一维网格
 //! 输入长度length必须是2的幂
 template<int TIDSIZE>
