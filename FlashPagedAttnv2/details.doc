@@ -1,0 +1,33 @@
+Q	[1, Hq, qkdim]	当前 token 的 Query。有 H 个头，每个头维度为 576。
+K	[seq_len, 1, qkdim]	历史上下文的 Key。只有 1 个头（MQA），每个头维度为 576。
+V	[seq_len, 1, kvdim]	历史上下文的 Value。只有 1 个头（MQA），每个头维度为 512。
+
+Q @ K^T → [1, Hq, qkdim] @ [qkdim, seq_len] → [1, Hq, seq_len]
+Attn_Weights = softmax([1, Hq, seq_len])
+Output = Attn_Weights @ V → [1, Hq, seq_len] @ [seq_len, 1, kvdim]
+最终得到 [1, Hq, 512]输出
+
+paged attention将物理寻址改为逻辑寻址
+假设一个block计算16个tokens
+k_cache_pool [N_blocks, 16tokens, qkdim]
+v_cache_pool [N_blocks, 16tokens, kvdim]
+block_table数组 [ceil(seq_len // 16tokens)]
+假设当前有效seq_len=1000 那么block_table数组长度为63
+
+对于每一个block持有的token 需要找到两个索引 
+1·全局token位置所属的逻辑组(比如21token属于第1个逻辑组 8token属于第0个逻辑组)
+2·该token在逻辑组内的偏移(比如21token在1组内偏移为5 8token在0组内偏移为8)
+根据第一个条件在block_table内访问定位到大分页cache第0维
+根据第二个条件在cache的第1维定位16tokens内的精准位置
+
+
+对于GQA的形状操作
+Q	[1, num_q_heads, qkdim]	当前token的Query (num_q_heads = 128)
+K	[seq_len, num_kv_heads, qkdim]	历史上下文的Key
+V	[seq_len, num_kv_heads, kvdim]	历史上下文的Value (num_kv_heads=8)
+
+将 K 从 [seq_len, num_kv_heads, qkdim] 广播为 [seq_len, num_q_heads, qkdim]
+将 V 从 [seq_len, num_kv_heads, kvdim] 广播为 [seq_len, num_q_heads, kvdim]
+每个原始的 KV 头被复制 num_q_heads / num_kv_heads 次
+
+计算与MQA一致

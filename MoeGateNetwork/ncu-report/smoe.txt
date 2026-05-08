@@ -1,0 +1,52 @@
+稀疏moe结构计算过程
+
+输入张量形状设输入为 x [1, seq_len, hidden_dim]
+1：batch size=1 seq_len：序列长度（如文本中的 token 数量） hidden_dim：输入的隐藏维度（与模型隐藏层维度一致）
+
+第一步先经过门控网络
+权重矩阵形状为hidden_dim num_experts 对于输入张量进行线性变换输出为seq_len num_experts
+表示每个位置的token(共seqlen个)对应numexperts个专家的初始得分
+
+然后添加噪声 依然是输出seq_len num_experts的权重矩阵
+
+softmax操作 
+对于seq_len num_experts的矩阵 沿着num_experts维度做softmax
+输出形状为seq_len num_experts矩阵 表示每个位置的token对于每个专家的归一化概率
+
+topk操作 对每个 token 选择概率最高的 K 个专家
+选中的专家索引：形状[1, seq_len, K] 记录每个 token 的 Top-K 专家 ID
+对应概率：形状[1, seq_len, K]保留Top-K 专家的概率
+
+
+第二步经过专家网络
+每个专家网络(E_i)是一个独立的神经网络（如前馈网络 FFN）
+输入为原始输入 x 的子集（仅被选中的 token 会送入对应专家）
+
+专家输入以 Top-K 为例
+假设每个token被分配给K个专家 对于第i个专家 其接收的输入是所有选择该专家的token
+形状为[num_selected_tokens, hidden_dim]
+num_selected_tokens：被分配给该专家的 token 总数（因不同 token 的选择不同，不同专家的输入数量可能不同）
+
+专家输出
+FFN线性变换高维度 激活函数 线性变换到低维度最终输出张量与输入一致
+[num_selected_tokens, hidden_dim]
+
+加权求和（最终输出）
+将每个 token 对应的 K 个专家输出
+按门控概率加权求和，得到 MOE 层的最终输出 y：形状与原始输入 x 一致：[1, seq_len, hidden_dim]
+
+
+计算理解：
+假设总体的输入为seq_len hidden_dim的输入
+专家 3 被 6 个 token 选中（记为 token 索引 [a, b, c, d, e, f]，比如 a=0, b=2, c=5, ...）；
+这 6 个 token 对专家 3 的权重分别为 [w_a, w_b, w_c, w_d, w_e, w_f]（来自 expert_weights 中对应位置，比如 w_a=0.3, w_b=0.5, ...）；
+输入 x 中这 6 个 token 的特征为 x_a, x_b, x_c, x_d, x_e, x_f（形状均为 [hidden_dim]），整体构成专家 3 的输入 x_3 = [x_a, x_b, x_c, x_d, x_e, x_f]（形状 [6, hidden_dim]）
+
+将专家 3 的输出 e_3 与 6 个权重一一对应相乘，得到 加权输出：weighted_e_3 = [w_a * e_3[0], w_b * e_3[1], w_c * e_3[2], w_d * e_3[3], w_e * e_3[4], w_f * e_3[5]]形状仍为 [6, hidden_dim]
+
+映射回原序列 对于新开辟的seqlen hidden_dim张量
+将 weighted_e_3 按原 token 索引 [a, b, c, d, e, f] 累加到最终输出 y 中：
+y[a] += w_a * e_3[0]（token a 累加专家 3 的加权输出）
+y[b] += w_b * e_3[1]（token b 累加专家 3 的加权输出）
+...
+y[f] += w_f * e_3[5]（token f 累加专家 3 的加权输出）
